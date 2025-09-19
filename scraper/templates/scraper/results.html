@@ -175,17 +175,16 @@
         {% else %}
             {% if data %}
                 <div class="article-content">
-                    {% for heading in data.headings %}
-                        {{ heading.html|safe }}
-                    {% endfor %}
-                    {% for paragraph in data.paragraphs %}
-                        {{ paragraph|safe }}
-                    {% endfor %}
-                    {% for link in data.links %}
-                        <p>{{ link|safe }}</p>
-                    {% endfor %}
-                    {% for image in data.images %}
-                        {{ image.html|safe }}
+                    {% for block in data.content %}
+                        {% if block.type == 'heading' %}
+                            {{ block.html|safe }}
+                        {% elif block.type == 'paragraph' %}
+                            {{ block.html|safe }}
+                        {% elif block.type == 'image' %}
+                            {{ block.html|safe }}
+                        {% elif block.type == 'block' %}
+                            {{ block.html|safe }}
+                        {% endif %}
                     {% endfor %}
                 </div>
 
