@@ -40,7 +40,7 @@ class WebScraper:
             raise Exception(f"Failed to fetch with requests: {str(e)}")
 
     def fetch_html_playwright(self, url):
-        """Fetch HTML using Playwright for dynamic sites"""
+        """Fetch HTML using Playwright for dynamic sites with enhanced loading"""
         try:
             # Create page with stealth options
             page = self.browser.new_page(
@@ -58,30 +58,53 @@ class WebScraper:
                 'Upgrade-Insecure-Requests': '1',
             })
 
+            # Navigate and wait for network idle
             page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            try:
+                page.wait_for_load_state('networkidle', timeout=15000)
+            except:
+                # If networkidle times out, just continue
+                pass
 
-            # Wait for main content to load - try multiple selectors
-            content_selectors = ['article', 'main', '[data-testid="post-content"]', '.post-content', '.entry-content', '.article-body']
-            content_found = False
-            for selector in content_selectors:
+            # Scroll to bottom to trigger lazy loading
+            page.evaluate("""
+                window.scrollTo(0, document.body.scrollHeight);
+            """)
+            time.sleep(1)  # Wait for lazy content to load
+
+            # Try to find and click "Load more" buttons (quick check)
+            load_more_selectors = [
+                'button:has-text("Load more")',
+                'button:has-text("Load More")',
+                'button:has-text("Show more")',
+                '.load-more',
+                '[data-testid="load-more"]'
+            ]
+
+            for selector in load_more_selectors:
                 try:
-                    page.wait_for_selector(selector, timeout=5000)
-                    content_found = True
-                    break
+                    load_button = page.query_selector(selector)
+                    if load_button and load_button.is_visible():
+                        load_button.click()
+                        time.sleep(1)  # Brief wait for new content
+                        break
                 except:
                     continue
 
-            if not content_found:
-                # Just wait for body to load
-                page.wait_for_selector('body', timeout=5000)
-
-            # Give extra time for dynamic content
-            time.sleep(3)
+            # Additional scroll
+            page.evaluate("""
+                window.scrollTo(0, document.body.scrollHeight);
+            """)
+            time.sleep(0.5)
 
             html = page.content()
             page.close()
             return html
         except Exception as e:
+            try:
+                page.close()
+            except:
+                pass
             raise Exception(f"Failed to fetch with Playwright: {str(e)}")
 
     def extract_content(self, html, url):
@@ -211,51 +234,119 @@ class WebScraper:
 
         return content_blocks
 
-    def crawl_website(self, seed_url, max_depth=2, max_pages=10):
-        """Crawl website starting from seed URL"""
+    def crawl_website(self, seed_url, max_depth=5, max_pages=1000):
+        """
+        Robustly crawl website to discover all links and extract content.
+
+        Args:
+            seed_url (str): Starting URL to crawl
+            max_depth (int): Maximum crawl depth (default: 5)
+            max_pages (int): Maximum number of pages to crawl (default: 1000)
+
+        Returns:
+            dict: {
+                "seed_url": seed_url,
+                "total_links": len(all_links),
+                "links": list(all_links),
+                "pages": list of page data with content
+            }
+        """
+        # Normalize seed URL
+        seed_url = self._normalize_url(seed_url)
+
+        # Initialize data structures
         visited = set()
         to_visit = [(seed_url, 0)]  # (url, depth)
-        results = []
+        all_links = set()
+        pages_data = []
 
-        base_domain = urlparse(seed_url).netloc
+        # Get base domain for subdomain allowance
+        parsed_seed = urlparse(seed_url)
+        base_domain = parsed_seed.netloc
+        base_domain_parts = base_domain.split('.')
+        if len(base_domain_parts) > 2:
+            # For subdomains like blog.example.com, allow *.example.com
+            base_domain_root = '.'.join(base_domain_parts[-2:])
+        else:
+            base_domain_root = base_domain
 
-        while to_visit and len(results) < max_pages:
+        print(f"Starting crawl of {seed_url} (domain: {base_domain_root}, max_depth: {max_depth}, max_pages: {max_pages})")
+
+        while to_visit and len(visited) < max_pages:
             current_url, depth = to_visit.pop(0)
 
+            # Skip if already visited or too deep
             if current_url in visited or depth > max_depth:
                 continue
 
             visited.add(current_url)
+            print(f"Crawling [{len(visited)}/{min(max_pages, len(to_visit) + len(visited))}]: {current_url}")
 
             try:
-                # Check if same domain (basic check)
-                if urlparse(current_url).netloc != base_domain:
-                    continue
+                # Always use Playwright for robust dynamic content handling
+                html = self.fetch_html_playwright(current_url)
 
-                html = self.fetch_html(current_url) if self.is_dynamic_site(current_url) else self.fetch_html_requests(current_url)
-                content = self.extract_content(html, current_url)
+                # Parse with BeautifulSoup
+                soup = BeautifulSoup(html, 'lxml')
 
-                results.append({
-                    'url': current_url,
-                    'title': content['title'],
-                    'content': content['content']
-                })
+                # Extract content
+                content_data = self.extract_content(html, current_url)
 
-                # Extract links for next level
+                # Only include pages with meaningful content
+                if content_data['content']:
+                    pages_data.append({
+                        'url': current_url,
+                        'title': content_data['title'],
+                        'content': content_data['content']
+                    })
+
+                # Extract all links
+                page_links = set()
+                for link in soup.find_all('a', href=True):
+                    href = link['href'].strip()
+
+                    # Skip empty, fragment-only, or non-HTTP links
+                    if not href or href.startswith('#') or href.startswith('mailto:') or href.startswith('javascript:'):
+                        continue
+
+                    # Normalize URL
+                    full_url = urljoin(current_url, href)
+                    normalized_url = self._normalize_url(full_url)
+
+                    # Check if URL is valid and within allowed domain
+                    parsed_url = urlparse(normalized_url)
+                    if parsed_url.scheme in ('http', 'https') and base_domain_root in parsed_url.netloc:
+                        page_links.add(normalized_url)
+
+                # Add discovered links to global set
+                all_links.update(page_links)
+
+                # Add new links to visit queue if within depth limit
                 if depth < max_depth:
-                    soup = BeautifulSoup(html, 'lxml')
-                    for link in soup.find_all('a', href=True):
-                        href = link['href']
-                        full_url = urljoin(current_url, href)
-                        # Only internal links
-                        if urlparse(full_url).netloc == base_domain and full_url not in visited:
-                            to_visit.append((full_url, depth + 1))
+                    for link_url in page_links:
+                        if link_url not in visited and link_url not in [u for u, d in to_visit]:
+                            to_visit.append((link_url, depth + 1))
 
             except Exception as e:
                 print(f"Error crawling {current_url}: {str(e)}")
                 continue
 
-        return results
+        print(f"Crawl completed. Visited {len(visited)} pages, discovered {len(all_links)} unique links, extracted content from {len(pages_data)} pages.")
+
+        return {
+            "seed_url": seed_url,
+            "total_links": len(all_links),
+            "links": sorted(list(all_links)),
+            "pages": pages_data
+        }
+
+    def _normalize_url(self, url):
+        """Normalize URL by removing fragments and standardizing format"""
+        parsed = urlparse(url)
+        # Remove fragment
+        normalized = parsed._replace(fragment='')
+        # Reconstruct URL
+        return normalized.geturl()
 
     def scrape_url(self, url):
         """Main method to scrape a single URL"""

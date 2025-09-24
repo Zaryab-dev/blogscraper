@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Link Crawler</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .container {
+            max-width: 1000px;
+            margin-top: 2rem;
+        }
+        .form-container {
+            background-color: #f8f9fa;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            margin-bottom: 2rem;
+        }
+        .results-container {
+            margin-top: 2rem;
+        }
+        .link-item {
+            padding: 0.5rem;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .link-item:last-child {
+            border-bottom: none;
+        }
+        .link-item a {
+            color: #007bff;
+            text-decoration: none;
+        }
+        .link-item a:hover {
+            text-decoration: underline;
+        }
+        .count-badge {
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Website Link Crawler</h1>
+
+        <div class="form-container">
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="current_max_pages" value="{{ current_max_pages }}">
+                <div class="mb-3">
+                    <label for="url" class="form-label">Enter Website URL</label>
+                    <input type="url" class="form-control" id="url" name="url" value="{{ submitted_url }}" placeholder="https://example.com" required>
+                </div>
+                <button type="submit" class="btn btn-primary" {% if submitted_url and not crawl_result and not error %}disabled{% endif %}>
+                    {% if submitted_url and not crawl_result and not error %}
+                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        Crawling...
+                    {% else %}
+                        Crawl Website
+                    {% endif %}
+                </button>
+            </form>
+        </div>
+
+        {% if error %}
+            <div class="alert alert-danger">
+                <strong>Error:</strong> {{ error }}
+            </div>
+        {% endif %}
+
+        {% if crawl_result %}
+            <div class="results-container">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h2>Extracted content from <span class="badge bg-success count-badge">{{ crawl_result.pages|length }}</span> pages</h2>
+                    <form method="post" class="d-inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="url" value="{{ submitted_url }}">
+                        <button type="submit" name="export" value="1" class="btn btn-success">
+                            <i class="fas fa-download"></i> Export to Excel
+                        </button>
+                    </form>
+                </div>
+
+                <div class="alert alert-info">
+                    <strong>Crawl Summary:</strong> Started from {{ crawl_result.seed_url }}, discovered {{ crawl_result.total_links }} unique links, extracted content from {{ crawl_result.pages|length }} pages.
+                </div>
+
+                {% for page in crawl_result.pages %}
+                <div class="article-container mb-5 border-bottom pb-4">
+                    <h3 class="article-title">
+                        <a href="{{ page.url }}" target="_blank" class="text-decoration-none text-dark">{{ page.title }}</a>
+                    </h3>
+                    <div class="article-meta mb-3">
+                        <small class="text-muted">Source: <a href="{{ page.url }}" target="_blank">{{ page.url }}</a></small>
+                    </div>
+
+                    <div class="article-content">
+                        {% for block in page.content %}
+                            {% if block.type == 'heading' %}
+                                {{ block.html|safe }}
+                            {% elif block.type == 'paragraph' %}
+                                {{ block.html|safe }}
+                            {% elif block.type == 'image' %}
+                                {{ block.html|safe }}
+                            {% elif block.type == 'block' %}
+                                {{ block.html|safe }}
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+
+                <div class="mt-4">
+                    <h4>All Discovered Links ({{ crawl_result.links|length }})</h4>
+                    <div class="list-group">
+                        {% for link in crawl_result.links %}
+                            <div class="link-item">
+                                <a href="{{ link }}" target="_blank" class="text-break">{{ link }}</a>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        {% elif submitted_url and not error %}
+            <div class="alert alert-warning">
+                No content found on the website.
+            </div>
+        {% endif %}
+
+        {% if submitted_url %}
+            <div class="text-center mt-4">
+                <a href="{% url 'crawl_links' %}" class="btn btn-secondary">Crawl Again</a>
+            </div>
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
